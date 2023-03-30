@@ -1,3 +1,4 @@
+#This script requires AzureAD module to be installed
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
