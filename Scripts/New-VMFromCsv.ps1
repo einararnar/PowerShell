@@ -6,8 +6,8 @@ $param = @("Name","Memory","ProcessorCount","Type")
 if (!$VMPath.EndsWith('\')) {$VMPath = $VMPath.Insert($VMPath.Length,'\')}
 cls
 # Check if the csv file exists and try to import it
-if (gi $CsvFullPath -ErrorAction Ignore) {
-    try { $csvfile = ipcsv $CsvFullPath -ErrorAction Stop} catch { Write-Warning "Csv file not found" }
+if (Get-Item $CsvFullPath -ErrorAction Ignore) {
+    try { $csvfile = Import-Csv $CsvFullPath -ErrorAction Stop} catch { Write-Warning "Csv file not found" }
 
     # For each machine in the csv file
     foreach ($item in $csvfile) {
@@ -16,7 +16,7 @@ if (gi $CsvFullPath -ErrorAction Ignore) {
             "Client" {$ISO = "D:\OS\W10Ex64.iso"; $SwitchName = "LAN"}
         }
         try {
-            if (gvm $item.Name -ErrorAction Ignore) {
+            if (Get-VM $item.Name -ErrorAction Ignore) {
                 throw
             } else {
                 New-VM -Name $item.Name -MemoryStartupBytes (($item.Memory).ToInt32($null)*1gb) -SwitchName $SwitchName -Path $VMPath `
