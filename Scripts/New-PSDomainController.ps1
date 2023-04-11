@@ -1,13 +1,58 @@
-﻿# Define function to change network settings
-function Set-PSNetworkSettings {
+﻿$ScriptFilePath = "C:\New-PSDomainController.ps1"
+$XmlFilePath = "C:\setup.xml"
+
+# Define function to create a new setup.xml file
+function New-PSSetupXML {
+    # Get credentials and safe mode password
+    # The passwords will be stored as securestring
+    $cred = Get-Credential -Message "Admin" -UserName Administrator
+    $SafeModePass = Read-Host "Safe Mode Administrator Password" -AsSecureString
+    
+    # Creating new Custom objects
+    $progressObject = [PSCustomObject]@{
+        Name = "Progress"
+        Stage = 1
+        Status = "Running"
+        Credentials = [pscredential]$cred
+    }
     # New network settings
-    $netsettings = [PSCustomObject]@{
+    $networkSettings = [PSCustomObject]@{
+        Name = "Network"
         InterfaceAlias = "Internet" # Net adapter name
         IPAddress = "192.168.50.10"
         Gateway = "192.168.50.1"
         PrefixLength = 24 # Subnet mask prefix
         DNSAddresses = "192.168.50.10", "8.8.8.8"
     }
+    # New Domain Settings
+    $domainsettings = [PSCustomObject]@{
+        Name = "Domain"
+        DomainName = "test.local" # DOMAIN NAME
+        SafeModePass = [securestring]$SafeModePass
+    }
+    # DHCP Scope options
+    $dhcpscopesettings = [PSCustomObject]@{
+        Name = "DHCP"
+        ScopeName = "test scope"
+        StartRange = "192.168.50.100"
+        EndRange = "192.168.50.150"
+        SubnetMask = "255.255.255.0"
+    }
+    $computerInfo = [PSCustomObject]@{
+        Name = "ComputerInfo"
+        ComputerName = "TESTLAB"
+    }
+
+    # Save the custom objects in an xml file
+    $setupobjects = $progressObject, $networkSettings, $domainsettings, $dhcpscopesettings, $computerInfo
+    $setupobjects | Export-Clixml -Path $XmlFilePath
+
+    return $setupobjects
+}
+
+# Define function to change network settings
+function Set-PSNetworkSettings {
+    param([Parameter(Mandatory)][PSCustomObject]$netsettings)
 
     # Check if there is already a network adapter called 'Internet'
     if (!(Get-NetAdapter -Name $netsettings.InterfaceAlias -ErrorAction Ignore)) {Rename-NetAdapter -Name Ethernet -NewName $netsettings.InterfaceAlias}
@@ -25,11 +70,7 @@ function Set-PSNetworkSettings {
 
 # Define New Forest function
 function Install-PSNewForest {
-    param($SMPass) # Get safe mode administrator password as a parameter
-    $domainsettings = [PSCustomObject]@{
-        DomainName = "test.local" # DOMAIN NAME
-        SafeModePass = $SMPass
-    }
+    param([Parameter(Mandatory)]$domainsettings)
 
     # Create new forest, Install DNS. NO REBOOT as we need to save progress before
     Install-ADDSForest -DomainName $domainsettings.DomainName -InstallDns -SafeModeAdministratorPassword $domainsettings.SafeModePass `
@@ -38,80 +79,59 @@ function Install-PSNewForest {
 
 # Define new DHCP scope function
 function New-PSDhcpScope {
-    # Scope options
-    $dhcpscope = [PSCustomObject]@{
-        Name = "test scope"
-        StartRange = "192.168.50.100"
-        EndRange = "192.168.50.150"
-        SubnetMask = "255.255.255.0"
-    }
-    Add-DhcpServerv4Scope -Name $dhcpscope.Name -StartRange $dhcpscope.StartRange -EndRange $dhcpscope.EndRange `
+    param(
+        [Parameter(Mandatory)]$dhcpscope,
+        [Parameter(Mandatory)][string]$dnsname
+    )
+
+    Add-DhcpServerv4Scope -Name $dhcpscope.ScopeName -StartRange $dhcpscope.StartRange -EndRange $dhcpscope.EndRange `
     -SubnetMask $dhcpscope.SubnetMask
     Set-DhcpServerv4OptionValue -DnsServer 192.168.50.10 -Router 192.168.50.10 -Force
-    Add-DhcpServerInDC -DnsName "TESTLAB.test.local" # Authorize in ADDS
+    Add-DhcpServerInDC -DnsName $dnsname # Authorize in ADDS
 }
 
-# Define function to create a new setup.xml file
-function New-PSSetupXML {
-    # Get credentials and safe mode password
-    # The passwords will be stored as securestring
-    $cred = Get-Credential -Message "Admin" -UserName Administrator
-    $SafeModePass = Read-Host "Safe Mode Administrator Password" -AsSecureString
-    
-    # Create a new custom object
-    $newobject = [PSCustomObject]@{
-        Stage = 1
-        Status = "Running"
-        Credentials = [pscredential]$cred
-        SafeModePass = [securestring]$SafeModePass
-    }
 
-    # Save the custom object as an xml file
-    $newobject | Export-Clixml -Path C:\setup.xml
-
-    # Return the custom object
-    return $newobject
-}
 
 # Define the main function
 function Install-PSDomainController {
     # Check if setup.xml file exists
     if ((Test-Path -Path C:\setup.xml) -eq $false) { # if the file does not exist
-        $currentStage = New-PSSetupXML # Create a new setup.xml and assign the content to a variable
+        $setupxml = New-PSSetupXML
 
+        $currentStage = $setupxml | where {$_.Name -eq "Progress"}
         # Create a new scheduled task that runs this script file
         $trigger = New-JobTrigger -AtStartup -RandomDelay 00:00:20
         $runasadmin = New-ScheduledJobOption -RunElevated
         Register-ScheduledJob -Credential $currentStage.Credentials -Name SetupDC -Trigger $trigger `
-        -ScheduledJobOption $runasadmin -FilePath C:\New-PSDomainController.ps1
+        -ScheduledJobOption $runasadmin -FilePath $ScriptFilePath
     } else {
-        # If setup.xml already exists, import it and assign to a variable
-        $currentStage = Import-Clixml -Path C:\setup.xml
+        $setupxml = Import-Clixml -Path $XmlFilePath
+        $currentStage = $setupxml | where {$_.Name -eq "Progress"}
     }
 
     switch ($currentStage.Stage) {
         1 { # Start of setup
             # Change network settings
-            Set-PSNetworkSettings
+            Set-PSNetworkSettings ($setupxml | where {$_.Name -eq "Network"})
 
             # Install ADDS and DHCP
             Get-WindowsFeature AD-Domain-Services, DHCP | Install-WindowsFeature -IncludeManagementTools
-            Rename-Computer -NewName "TESTLAB"
+            Rename-Computer -NewName (($setupxml | where {$_.Name -eq "ComputerInfo"}).ComputerName)
 
             # Save progress to setup.xml
             $currentStage.Stage = 2
-            $currentStage | Export-Clixml C:\setup.xml
+            $setupxml | Export-Clixml $XmlFilePath
             
             # First reboot   
             Restart-Computer -Force
         }
         2 { # Stage 2
-            # install new forest, supply safe mode pass as a parameter
-            Install-PSNewForest -SMPass $currentStage.SafeModePass
+            # install new forest
+            Install-PSNewForest ($setupxml | where {$_.Name -eq "Domain"})
             
             # Save progress   
             $currentStage.Stage = 3
-            $currentStage | Export-Clixml C:\setup.xml
+            $setupxml | Export-Clixml $XmlFilePath
 
             # Change scheduled job trigger
             $newTrigger = New-JobTrigger -AtLogOn
@@ -123,12 +143,13 @@ function Install-PSDomainController {
         3 { # Final stage
             
             #Create a new dhcp scope and authorize server in ADDS
-            New-PSDhcpScope
+            $dnsname = "$(($setupxml | where {$_.Name -eq "ComputerInfo"}).ComputerName).$(($setupxml | where {$_.Name -eq "Domain"}).DomainName)"
+            New-PSDhcpScope -dhcpscope ($setupxml | where {$_.Name -eq "DHCP"}) -dnsname $dnsname
 
             # Save progress
             $currentStage.Status = "Complete"
             $currentStage.Stage = 4
-            $currentStage | Export-Clixml -Path C:\setup.xml
+            $setupxml | Export-Clixml -Path $XmlFilePath
         }
     }
 
@@ -138,7 +159,7 @@ function Install-PSDomainController {
         Unregister-ScheduledJob -Name SetupDC
 
         # Remove setup.xml
-        Remove-Item -Path C:\setup.xml -Force
+        Remove-Item -Path $XmlFilePath -Force
     }
 }
 
