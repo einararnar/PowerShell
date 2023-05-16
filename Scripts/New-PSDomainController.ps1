@@ -33,10 +33,12 @@ function New-PSSetupXML {
     # DHCP Scope options
     $dhcpscopesettings = [PSCustomObject]@{
         Name = "DHCP"
-        ScopeName = "test scope"
-        StartRange = "192.168.50.100"
-        EndRange = "192.168.50.150"
+        ScopeName = "client scope"
+        StartRange = "172.16.32.100"
+        EndRange = "172.16.32.150"
         SubnetMask = "255.255.255.0"
+        DnsServer = "172.16.32.10"
+        Router = "172.16.32.10"
     }
     $computerInfo = [PSCustomObject]@{
         Name = "ComputerInfo"
@@ -86,7 +88,7 @@ function New-PSDhcpScope {
 
     Add-DhcpServerv4Scope -Name $dhcpscope.ScopeName -StartRange $dhcpscope.StartRange -EndRange $dhcpscope.EndRange `
     -SubnetMask $dhcpscope.SubnetMask
-    Set-DhcpServerv4OptionValue -DnsServer 192.168.50.10 -Router 192.168.50.10 -Force
+    Set-DhcpServerv4OptionValue -DnsServer $dhcpscope.DnsServer -Router $dhcpscope.Router -Force
     Add-DhcpServerInDC -DnsName $dnsname # Authorize in ADDS
 }
 
